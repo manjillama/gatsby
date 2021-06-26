@@ -33,19 +33,14 @@ export function detectLmdbStore(): boolean {
   }
   isLmdb = flagIsSet
   if (isLmdb) {
-    console.info(`IS LMDB!`)
+    // console.info(`IS LMDB!`)
   } else {
-    console.info(`IN MEMORY STORE`)
+    // console.info(`IN MEMORY STORE`)
   }
   return flagIsSet
 }
 
 function isLmdbStoreFlagSet(): boolean {
-  if (process.env.NODE_ENV === `test`) {
-    console.info(`IS LMDB`)
-    return true
-  }
-  // return true
   return (
     Boolean(process.env.GATSBY_EXPERIMENTAL_LMDB_STORE) &&
     process.env.GATSBY_EXPERIMENTAL_LMDB_STORE !== `false` &&
