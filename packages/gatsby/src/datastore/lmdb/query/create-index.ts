@@ -76,7 +76,6 @@ export function getIndexMetadata(
 ): IIndexMetadata {
   const { databases } = context
   const indexName = buildIndexName(typeName, indexFields)
-
   const meta: IIndexMetadata = databases.metadata.get(toMetadataKey(indexName))
 
   if (assertReady && meta?.state !== `ready`) {
@@ -84,7 +83,6 @@ export function getIndexMetadata(
       `Index ${indexName} is not ready yet. State: ${meta?.state ?? `unknown`}`
     )
   }
-
   return meta
 }
 

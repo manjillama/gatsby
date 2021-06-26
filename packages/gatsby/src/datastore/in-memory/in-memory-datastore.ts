@@ -47,7 +47,7 @@ function countNodes(typeName?: string): number {
   return nodes ? nodes.size : 0
 }
 
-function runQuery(args: IRunFilterArg): Promise<Array<IGatsbyNode> | null> {
+function runQuery(args: IRunFilterArg): Promise<Iterable<IGatsbyNode> | null> {
   return Promise.resolve(runFastFiltersAndSort(args))
 }
 

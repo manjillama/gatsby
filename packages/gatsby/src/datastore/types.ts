@@ -3,6 +3,7 @@ import { IGatsbyNode } from "../redux/types"
 import { GatsbyGraphQLType } from "../../index"
 import { IInputQuery } from "./common/query"
 import { IGraphQLRunnerStats } from "../query/types"
+import { GatsbyIterable } from "./common/iterable"
 
 export type NodeId = string
 export type NodeType = string
@@ -31,6 +32,12 @@ export interface IRunQueryArgs {
   resolvedFields: Record<string, any>
   nodeTypeNames: Array<string>
   stats: IGraphQLRunnerStats
+}
+
+export interface IQueryResult {
+  [Symbol.iterator](): GatsbyIterable<IGatsbyNode>
+  entries: GatsbyIterable<IGatsbyNode>
+  totalCount: () => Promise<number>
 }
 
 // Note: this type is compatible with lmdb-store ArrayLikeIterable

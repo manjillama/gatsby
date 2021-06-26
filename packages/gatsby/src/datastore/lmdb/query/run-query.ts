@@ -3,7 +3,6 @@ import { IGatsbyNode } from "../../../redux/types"
 import { GatsbyIterable } from "../../common/iterable"
 import {
   createDbQueriesFromObject,
-  DbComparator,
   DbQuery,
   dbQueryToDottedField,
   getFilterStatement,
@@ -187,23 +186,18 @@ interface IQueryContext {
 export async function doRunQuery(
   args: IDoRunQueryArgs
 ): Promise<GatsbyIterable<IGatsbyNode>> {
+  // Note: Keeping doRunQuery method the only async method in chain for perf
   const context = createQueryContext(args)
 
-  // Keeping doRunQuery method the only async method in chain
-  await Promise.all(
-    context.nodeTypeNames.map(typeName =>
-      createIndex(context, typeName, context.suggestedIndexFields)
+  if (canUseIndex(context)) {
+    await Promise.all(
+      context.nodeTypeNames.map(typeName =>
+        createIndex(context, typeName, context.suggestedIndexFields)
+      )
     )
-  )
-
-  // Make resulting iterable re-entrable
-  return new GatsbyIterable<IGatsbyNode>(
-    () =>
-      canUseIndex(context)
-        ? performIndexScan(context)
-        : performFullTableScan(context),
-    () => runCount(context)
-  )
+    return performIndexScan(context)
+  }
+  return performFullTableScan(context)
 }
 
 function performIndexScan(context: IQueryContext): GatsbyIterable<IGatsbyNode> {
@@ -318,7 +312,7 @@ function filterNodes(
 }
 
 /**
- * Takes intermediate result and applies any remaining dbQueries.
+ * Takes intermediate result and applies any remaining filterQueries.
  *
  * If result is already fully filtered - simply returns.
  */
@@ -341,7 +335,7 @@ function completeFiltering(
   // console.log(`have to complete results`, filtersToApply)
 
   let items = 0
-  const start = Date.now()
+  // const start = Date.now()
   let shown = true
 
   return intermediateResult.filter(node => {
@@ -436,20 +430,6 @@ function isFullyFiltered(
   usedQueries: Set<DbQuery>
 ): boolean {
   return dbQueries.length === usedQueries.size
-}
-
-function getEqQueries(dbQueries: Array<DbQuery>): Array<DbQuery> {
-  return dbQueries.filter(
-    q => getFilterStatement(q).comparator === DbComparator.EQ
-  )
-}
-
-function isMixedSortOrder(
-  sortFields: Array<string>,
-  sortOrder: Array<"asc" | "desc" | boolean>
-): boolean {
-  const first = isDesc(sortOrder[0])
-  return sortFields.some((_, index) => isDesc(sortOrder[index]) !== first)
 }
 
 function createNodeSortComparator(sortFields: SortFields): (a, b) => number {

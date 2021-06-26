@@ -280,7 +280,7 @@ function narrowResultsIfPossible(
 
   // console.log(`Narrowing result: `, filtersToApply)
   let items = 0
-  const start = Date.now()
+  // const start = Date.now()
   let shown = false
 
   return {

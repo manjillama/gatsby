@@ -300,7 +300,7 @@ export function runFastFiltersAndSort(
  * Return a collection of results. Collection will be limited to 1 if `firstOnly` is true
  */
 function convertAndApplyFastFilters(
-  filterFields: Array<IInputQuery> | undefined,
+  filterFields: IInputQuery | undefined,
   firstOnly: boolean,
   nodeTypeNames: Array<string>,
   filtersCache: FiltersCache,

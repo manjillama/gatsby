@@ -24,82 +24,101 @@ export function suggestIndex({
   sort,
   maxFields = 4,
 }: ISelectIndexArgs): Array<IndexField> {
-  sort = sort || { fields: [], order: [] }
-  const dbQueries = createDbQueriesFromObject(prepareQueryArgs(filter))
-  const queriesThatCanUseIndex = getQueriesThatCanUseIndex(dbQueries)
+  const filterQueries = createDbQueriesFromObject(prepareQueryArgs(filter))
+  const filterQueriesThatCanUseIndex = getQueriesThatCanUseIndex(filterQueries)
+  const sortFields: Array<IndexField> = getSortFieldsThatCanUseIndex(sort)
 
-  // Mixed sort order is not supported by our indexes :/
-  const sortFields: Array<IndexField> = []
-  const initialOrder = isDesc(sort?.order[0]) ? -1 : 1
-
-  for (let i = 0; i < sort.fields.length; i++) {
-    const field = sort.fields[i]
-    const order = isDesc(sort.order[i]) ? -1 : 1
-    if (order !== initialOrder) {
-      break
-    }
-    sortFields.push([field, order])
-  }
-
-  if (!sortFields.length && !queriesThatCanUseIndex.length) {
+  if (!sortFields.length && !filterQueriesThatCanUseIndex.length) {
     return []
   }
-  if (!queriesThatCanUseIndex.length) {
+  if (!filterQueriesThatCanUseIndex.length) {
     return dedupeAndTrim(sortFields, maxFields)
   }
   if (!sortFields.length) {
-    return dedupeAndTrim(toIndexFields(queriesThatCanUseIndex), maxFields)
+    return dedupeAndTrim(toIndexFields(filterQueriesThatCanUseIndex), maxFields)
   }
-
-  const eqFields = new Set<string>(
-    queriesThatCanUseIndex
-      .filter(
-        dbQuery => getFilterStatement(dbQuery).comparator === DbComparator.EQ
-      )
-      .map(dbQuery => dbQueryToDottedField(dbQuery))
+  const overlap = findOverlappingFields(
+    filterQueriesThatCanUseIndex,
+    sortFields
   )
-
-  // Remove sort fields having "eq" filter - they don't make any sense (TODO: maybe also remove fields having IN)
-  // sortFields = sortFields.filter(([fieldName]) => !eqFields.has(fieldName))
-
-  // Split sort fields into 2 parts: [...overlapping, ...nonOverlapping]
-  const overlap = new Set()
-  for (const [fieldName] of sortFields) {
-    const dbQuery = queriesThatCanUseIndex.find(
-      q => dbQueryToDottedField(q) === fieldName
-    )
-    if (!dbQuery) {
-      break
-    }
-    overlap.add(fieldName)
-  }
-
   if (!overlap.size) {
-    // No overlap - in this case filter+sort only makes sense when all filters have `eq` comparator
+    // Filter and sort fields do not overlap.
+    // In this case combined index for filter+sort only makes sense when all filters have `eq` predicate
     // Same as https://docs.mongodb.com/manual/tutorial/sort-results-with-indexes/#sort-and-non-prefix-subset-of-an-index
-    if (eqFields.size === queriesThatCanUseIndex.length) {
+    const eqFields = getFieldsWithEqPredicate(filterQueriesThatCanUseIndex)
+
+    if (eqFields.size === filterQueriesThatCanUseIndex.length) {
       const eqFilterFields: Array<IndexField> = [...eqFields].map(f => [f, 1])
       return dedupeAndTrim([...eqFilterFields, ...sortFields], maxFields)
     }
-    // Single unbound range filter: lt, gt, gte, lte: prefer sort fields
+    // Single unbound range filter: "lt", "gt", "gte", "lte" (but not "in"): prefer sort fields
     if (
-      queriesThatCanUseIndex.length === 1 &&
-      getFilterStatement(queriesThatCanUseIndex[0]).comparator !==
+      filterQueriesThatCanUseIndex.length === 1 &&
+      getFilterStatement(filterQueriesThatCanUseIndex[0]).comparator !==
         DbComparator.IN
     ) {
       return dedupeAndTrim(sortFields, maxFields)
     }
     // Otherwise prefer filter fields
-    return dedupeAndTrim(toIndexFields(queriesThatCanUseIndex), maxFields)
+    return dedupeAndTrim(toIndexFields(filterQueriesThatCanUseIndex), maxFields)
   }
 
   // There is an overlap:
   // First add all non-overlapping filter fields to index prefix, then all sort fields (including overlapping)
-  const filterFields = queriesThatCanUseIndex
+  const filterFields = filterQueriesThatCanUseIndex
     .map((q): IndexField => [dbQueryToDottedField(q), 1])
     .filter(([name]) => !overlap.has(name))
 
   return dedupeAndTrim([...filterFields, ...sortFields], maxFields)
+}
+
+function getSortFieldsThatCanUseIndex(
+  querySortArg: IRunQueryArgs["queryArgs"]["sort"]
+): Array<IndexField> {
+  const sort = querySortArg || { fields: [], order: [] }
+  const initialOrder = isDesc(sort?.order[0]) ? -1 : 1
+
+  const sortFields: Array<IndexField> = []
+  for (let i = 0; i < sort.fields.length; i++) {
+    const field = sort.fields[i]
+    const order = isDesc(sort.order[i]) ? -1 : 1
+    if (order !== initialOrder) {
+      // Mixed sort order is not supported by our indexes yet :/
+      // See https://github.com/DoctorEvidence/lmdb-store/discussions/62#discussioncomment-898949
+      break
+    }
+    sortFields.push([field, order])
+  }
+  return sortFields
+}
+
+function findOverlappingFields(
+  filterQueries: Array<DbQuery>,
+  sortFields: Array<IndexField>
+): Set<string> {
+  const overlap = new Set<string>()
+
+  for (const [fieldName] of sortFields) {
+    const filterQuery = filterQueries.find(
+      q => dbQueryToDottedField(q) === fieldName
+    )
+    if (!filterQuery) {
+      break
+    }
+    overlap.add(fieldName)
+  }
+  return overlap
+}
+
+function getFieldsWithEqPredicate(filterQueries: Array<DbQuery>): Set<string> {
+  return new Set<string>(
+    filterQueries
+      .filter(
+        filterQuery =>
+          getFilterStatement(filterQuery).comparator === DbComparator.EQ
+      )
+      .map(filterQuery => dbQueryToDottedField(filterQuery))
+  )
 }
 
 function toIndexFields(queries: Array<DbQuery>): IndexFields {
