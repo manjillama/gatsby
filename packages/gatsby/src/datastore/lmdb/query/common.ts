@@ -32,9 +32,11 @@ export function resolveFieldValue(
   if (resolvedNodeFields) {
     result = getValueAt(resolvedNodeFields, dottedFieldPath)
   }
-  // Note: if result === null we return null
+  if (typeof result !== `undefined`) {
+    return result
+  }
   const node = typeof nodeOrThunk === `function` ? nodeOrThunk() : nodeOrThunk
-  return result ?? getValueAt(node, dottedFieldPath)
+  return getValueAt(node, dottedFieldPath)
 }
 
 export function shouldFilter(

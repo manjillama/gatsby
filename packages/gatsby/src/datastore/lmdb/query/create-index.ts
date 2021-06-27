@@ -237,13 +237,11 @@ async function indexReady(
         return
       }
       if (retries++ > 1000) {
-        reject(
-          new Error(`Index ${indexName} is locked for more than 5 minutes`)
-        )
+        reject(new Error(`Index ${indexName} is locked for too long`))
         return
       }
       setTimeout(poll, timeout)
-      timeout = Math.min(100, timeout * 1.5)
+      timeout = Math.min(200, timeout * 1.5)
     }
     poll()
   })
