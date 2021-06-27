@@ -398,7 +398,9 @@ What to do with `{ eq: null }` including undefined values.
 Avoiding async iterators: https://github.com/nodejs/node/issues/31979
 
 - pagination
-- aggregation (count, min, max, etc)
+- aggregation (count, min, max, group, etc)
+- replace trackInlineObjectsInRootNode with context
+- remove \_\_gatsby_resolved (was needed for sift only)
 
 [1]: https://docs.mongodb.com/manual/core/index-compound/
 [2]: https://docs.mongodb.com/manual/core/index-multikey/
