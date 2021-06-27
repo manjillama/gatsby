@@ -10,7 +10,7 @@ export default ({ data }) => {
 
 export const query = graphql`
   query($pagesLeft: Int, $sort: TestSortInput) {
-    allTest(filter: { nodeNum: { gt: $pagesLeft } }, sort: $sort, limit: 5) {
+    allTest(filter: { nodeNum: { gt: $pagesLeft } }, sort: $sort, limit: 100) {
       nodes {
         nodeNum
         text

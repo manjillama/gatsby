@@ -13,7 +13,7 @@ export const query = graphql`
     allTest(
       filter: { nodeNum: { gt: $pageNum, lt: $pagesTotal } }
       sort: $sort
-      limit: 5
+      limit: 100
     ) {
       nodes {
         nodeNum

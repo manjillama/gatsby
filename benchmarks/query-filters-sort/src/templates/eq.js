@@ -9,8 +9,8 @@ export default ({ data }) => {
 }
 
 export const query = graphql`
-  query($pageNumAsStr: String!, $sort: TestSortInput) {
-    allTest(filter: { testEq: { eq: $pageNumAsStr } }, sort: $sort, limit: 5) {
+  query($fooBarValue: String!, $sort: TestSortInput) {
+    allTest(filter: { testIn: { eq: $fooBarValue } }, sort: $sort, limit: 100) {
       nodes {
         nodeNum
         text

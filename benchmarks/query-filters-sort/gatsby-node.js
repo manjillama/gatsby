@@ -56,6 +56,7 @@ exports.createPages = async ({ actions: { createPage } }) => {
           [`foo`, `bar`, `baz`, `foobar`][pageNum % 4],
           [`foo`, `bar`, `baz`, `foobar`][(pageNum + 1) % 4],
         ],
+        fooBarValue: [`foo`, `bar`, `baz`, `foobar`][pageNum % 4],
         intValue: pageNum,
         pageNum: pageNum,
         pagesLeft: NUM_PAGES - pageNum,
@@ -64,8 +65,10 @@ exports.createPages = async ({ actions: { createPage } }) => {
         nodesTotal: NUM_NODES,
         pagesTotal: NUM_PAGES,
         sort: SORT
-          ? { fields: ["id"], order: SORT === `1` ? `ASC` : `DESC` }
-          // ? { fields: ["sortRandom"], order: SORT === `1` ? `ASC` : `DESC` }
+          ? {
+              fields: ["nodeNum", "sortRandom"],
+              order: SORT === `1` ? `ASC` : `DESC`,
+            }
           : undefined,
         regex: `/^${String(pageNum).slice(0, 1)}/`, // node id starts with the same number as page id
       },

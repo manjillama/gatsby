@@ -15,7 +15,7 @@ export const query = graphql`
         testElemMatch: { elemMatch: { testEq: { eq: $pageNumAsStr } } }
       }
       sort: $sort
-      limit: 5
+      limit: 100
     ) {
       nodes {
         nodeNum

@@ -10,7 +10,7 @@ export default ({ data }) => {
 
 export const query = graphql`
   query($regex: String, $sort: TestSortInput) {
-    allTest(filter: { id: { regex: $regex } }, sort: $sort, limit: 5) {
+    allTest(filter: { id: { regex: $regex } }, sort: $sort, limit: 100) {
       nodes {
         nodeNum
         text
