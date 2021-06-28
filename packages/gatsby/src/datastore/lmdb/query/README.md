@@ -9,18 +9,6 @@ The implementation and limitations are pretty similar to that of MongoDB.
 Indexes for all object types are stored in the same LMDB database (aka collection).
 Keys in this database are represented as arrays of scalar JS values ([via][4]).
 
-Table of contents:
-
-- [Index structure](#index-structure)
-- [Creating an index](#creating-an-index)
-  - [Caveat: materialization](#caveat-materialization)
-  - [Caveat: concurrent `createIndex` calls](#caveat-concurrent-createindex-calls)
-- [Queries that can use index](#queries-that-can-use-index)
-- [Suggest index for a query](#suggest-index-for-a-query)
-- [Querying](#querying)
-  - [Index scans](#scans)
-  - [Completing results](#)
-
 # Index structure
 
 Conceptually an index is a huge flat map where keys are _sorted_ tuples of node attributes and values
@@ -37,12 +25,12 @@ const a1 = {
 }
 ```
 
-A secondary index for fields `{ a: 1, b: 1 }` will include **2** entries for this node
+A secondary index for fields `{ a: 1, b: 1 }` will include **2** keys for this node
 (sorted by key):
 
 ```
-["A/a:1/b:1", "foo", "bar", "a1"]: ["a1"]
-["A/a:1/b:1", "foo", "baz", "a1"]: ["a1"]
+["A/a:1/b:1", "foo", "bar", "a1"]: "a1"
+["A/a:1/b:1", "foo", "baz", "a1"]: "a1"
 ```
 
 The **first** column is index id: `"A/a:1/b:1`
@@ -71,44 +59,6 @@ of different nodes. For instance if we add another node `a2` with the same set o
 > But it doesn't fully solve the problem of duplicates for composite multikey indexes
 > ([see details](#todoc)).
 
-### Caveat: `null` and `undefined` values
-
-Imagine we want to add another node `"a3"` to the index which has no `b` field:
-
-```js
-const a3 = {
-  id: "a3",
-  a: null,
-  internal: { type: "A" },
-}
-```
-
-We cannot exclude it from the index because it still has value for `a` field and should
-be returned for a query like this: `{ filter: { a: { in: [null, "foo"] } } }`.
-
-So it has to be added to index too. [lmdb-store][3] supports `null` values in keys but not `undefined`.
-Thankfully it also supports symbols! So we have a `Symbol("undef")` to represent `undefined`:
-
-```
-["A/a:1/b:1", null, Symbol("undef"), "a3"]: "a3"
-["A/a:1/b:1", "foo", "bar", "a1"]: "a1"
-["A/a:1/b:1", "foo", "bar", "a2"]: "a2"
-["A/a:1/b:1", "foo", "baz", "a1"]: "a1"
-```
-
-We add a node to index even if the very first attribute `a` is `undefined` because
-index may be also used just for sorting: `{ sort: { fields: ["a"] } }`.
-
-> Our indexes are essentially similar to [non-sparse][7] MongoDB indexes
-
-### Caveat: sort order for `null` and `undefined`
-
-TODO
-
-### Caveat: empty arrays
-
-TODO
-
 # Creating an index
 
 `createIndex` expects node type name and index config as input (similar to MongoDB format):
@@ -125,77 +75,16 @@ Each key in this config is a field to be indexed. Supports dot-notation to expre
 To actually build an index we traverse all nodes for a given type and get values for all fields
 defined in the index config as described in [index structure](#index-structure) chapter.
 
-While creating an index we collect various information:
-
-- Is it a `MultiKey` index (i.e. are there any indexed array values)
+While creating an index we collect various stats but the most important is `multiKeyFields`.
+If it contains fields, then the index is a `MultiKey` index and has several limitations.
 
 This is later used for various optimizations when actually scanning the index.
 
-## Caveat: materialization
-
-There is a special case when we index fields having custom GraphQL resolvers.
-Values for such fields require additional resolution step. We call it "materialization".
-
-For example, imaging this node:
-
-```js
-const a1 = {
-  id: "a1",
-  a: "foo",
-  b: ["bar", "baz"],
-  internal: { type: "A" },
-}
-```
-
-Also, imagine a custom resolver defined for field `b`:
-
-```js
-exports.createResolvers = ({ createResolvers }) => {
-  createResolvers({
-    A: {
-      b: source => source.join(`-`),
-    },
-  })
-}
-```
-
-Then the actual value added to index will be
-
-```
-"bar-baz"
-```
-
-> Notes:
->
-> 1. Currently, materialization does another full pass on all nodes before `createIndex`.
-> 2. Materialization is optional - it doesn't occur if field has no custom resolver.
-> 3. The assumption about materialization is that it is deterministic.
->    We do not invalidate materialization results in index unless a corresponding node itself was updated or deleted.
-
-## Caveat: concurrent `createIndex` calls
-
-Technically it is possible to start multiple concurrent attempts to create an index
-(or even parallel - from multiple processes).
-
-To mitigate conflicts each index has metadata that includes `state` which helps to implement locking:
-
-```ts
-type IndexState = `initial` | `building` | `error` | `ready` | `stale`
-```
-
-This metadata is stored in a separate LMDB `metadata` database that can be accessed from multiple processes.
-
-> Note: since multiple processes can write to the same `metadata` database,
-> this database uses [versioning][4] feature of `lmdb-store`
-
-## Caveat: indexing errors
-
-LMDB supports key sizes up to 1978 bytes long. If all indexed values combined exceed this limit, then
-it will throw. In this case indexing will fail and index will get `error` state.
-
-Query can still run but will have to fallback to full scan.
-
 # Queries that can use index
+
+> **tldr;** basically only `eq` filters can always use index with `sort`.
+> All range filters (`in`, `gt`, etc) can only use index with _overlapping_ sort fields.
+> Other filters (`ne`, `regex`, `glob`) cannot use indexes.
 
 Not all filters can use indexes. The following Gatsby filters **can**:
 
@@ -289,26 +178,54 @@ _values_. This allows us to avoid additional expensive `getNode` operations.
 
 # Running a query
 
+There are several codepaths here
+
+### Can not use index
+
+> Can happen for `regex`/`glob`/`ne`/`nin` filters.
+
+1. Iterate through all nodes and apply filters.
+2. 🐌 If sorting is needed - load all filtered nodes in memory and sort
+3. Slice results (it is applied lazily to final iterable)
+
+### Can use index
+
 Running a query consists of several steps:
 
 1. Select an index
 2. Create this index (if it does not exist yet)
-3. Scan the index
-   1. Generate ranges for index scan from the query (sorted according to requested sorting)
-   2. Fetch ranges and concat them
-   3. If index is a `MultiKey` index - additionally deduplicate results
-   4. Apply remaining filters (if any) that may use the data stored in the index
-   5. If sorting is not satisfied by the index itself but index contains data needed for sorting -
-      load the data into memory and run in-memory sort.
-4. Complete query results
-   1. For each index entry - load full node object
-   2. Apply any remaining unapplied filter
-   3. If sorting is not satisfied by the index - traverse all resulting nodes and sort in-memory.
+3. Filter using index
+4. For each entry returned from index - load full node object
+5. Apply any remaining not applied filters
 
-Every step uses iterators and generators, so essentially it is a single traversal defined
-lazily. It doesn't actually require double traversal (except when in-memory sorting is actually needed).
+#### If index satisfies sorting requirements (or no sorting requirements):
 
-## Caveat: MultiKey indexes and count
+6. Apply `skip` / `limit`
+7. Done
+
+#### If index doesn't satisfy sorting requirements (letal):
+
+6. 🐌 Load all resulting nodes and sort in-memory.
+7. Apply `skip` / `limit`
+8. Done
+
+> **Note:** Every step uses iterators and generators, so essentially it is a single traversal defined lazily.
+> It doesn't actually require double traversal (except when in-memory sorting is actually needed).
+>
+> For example `skip` and `limit` are added at the last step, but they will be actually applied
+> to the whole iterable as we traverse it, so no unnecessary iteration will happen.
+
+# Caveats
+
+## 1. Counting is slow
+
+In-memory store can do counts in `O(1)` using `results.length`. In case of querying LMDB - counting
+basically requires a separate query without `skip` / `limit`. So it is at least `O(N)`.
+
+But when couting cannot be fully satisfied by the filter - it means we literally must
+traverse the full resultset.
+
+## 2. MultiKey indexes and count
 
 Multikey index cannot reliably count the number of elements returned by some query
 The following node has two entries in index `{ a: 1 }`.
@@ -324,41 +241,96 @@ predicate (field `a` in this example).
 
 So in the worst case we must traverse all index results and deduplicate to get the actual count.
 
-## Caveat: MultiKey index and limit, offset
+## 3. MultiKey index and limit, offset
 
 Limit and offset are also unreliable with MultiKey indexes
 (also unless all multiKey fields have `eq` predicate).
 
-## Caveat: counts
-
-## Caveat: mixed sort order
+## 4. Mixed sort order requires full in-memory sort (yet)
 
 Currently, we cannot scan index in mixed order. This feature requires binary inversion for key elements
 in `lmdb-store` which is [not yet available][6].
 
-# Limitations
+## 5. Key size limit
 
-> One major problem with MultiKey indexes is duplication of node ids in results in range queries
-> which requires additional deduplication pass and complicates counting the total number of results.
+1978 bytes hard limit.
 
-# Caveats
+## 6. Materialization
 
-- key size limit
-- mixed sort order
-- materialization
-- using node counter for default sorting vs ndoe id
-- tracking inline objects
-- counts and any aggregations...!
+There is a special case when we index fields having custom GraphQL resolvers.
+Values for such fields require additional resolution step. We call it "materialization".
 
-Fast counts are only possible for plain indexes (non-MuliKey) +
-when all filter fields are included in index.
+For example, imaging this node:
 
-So for fast counts FILTER fields are more important than SORT fields.
+```js
+const a1 = {
+  id: "a1",
+  a: "foo",
+  b: ["bar", "baz"],
+  internal: { type: "A" },
+}
+```
 
-and ensures consistent ordering when query has no sort order set.
+Also, imagine a custom resolver defined for field `b`:
 
-> In databases the last column is usually the same as primary key (in our example "a1").
-> But Gatsby uses UUID for the actual id value which is 16 bytes uncompressed.
+```js
+exports.createResolvers = ({ createResolvers }) => {
+  createResolvers({
+    A: {
+      b: source => source.join(`-`),
+    },
+  })
+}
+```
+
+Then the actual value added to index will be
+
+```
+"bar-baz"
+```
+
+> Notes:
+>
+> 1. Currently, materialization does another full pass on all nodes before `createIndex`.
+> 2. Materialization is optional - it doesn't occur if field has no custom resolver.
+> 3. The assumption about materialization is that it is deterministic.
+>    We do not invalidate materialization results in index unless a corresponding node itself was updated or deleted.
+
+## 7. Using node counter for default sorting vs node id
+
+## 8. Tracking inline objects
+
+## 9. Any aggregations
+
+## 10. `null` and `undefined` values
+
+Imagine we want to add another node `"a3"` to the index which has no `b` field:
+
+```js
+const a3 = {
+  id: "a3",
+  a: null,
+  internal: { type: "A" },
+}
+```
+
+We cannot exclude it from the index because it still has value for `a` field and should
+be returned for a query like this: `{ filter: { a: { in: [null, "foo"] } } }`.
+
+So it has to be added to index too. [lmdb-store][3] supports `null` values in keys but not `undefined`.
+Thankfully it also supports symbols! So we have a `Symbol("undef")` to represent `undefined`:
+
+```
+["A/a:1/b:1", null, Symbol("undef"), "a3"]: "a3"
+["A/a:1/b:1", "foo", "bar", "a1"]: "a1"
+["A/a:1/b:1", "foo", "bar", "a2"]: "a2"
+["A/a:1/b:1", "foo", "baz", "a1"]: "a1"
+```
+
+We add a node to index even if the very first attribute `a` is `undefined` because
+index may be also used just for sorting: `{ sort: { fields: ["a"] } }`.
+
+> Our indexes are essentially similar to [non-sparse][7] MongoDB indexes
 
 # Breaking changes:
 
@@ -389,19 +361,6 @@ We likely can support old-style model by returning array-like iterable object,
 but it will be less efficient with LMDB (or any db) because you _really_ want to
 apply `limit`/`skip` at the DB query/cursor level.
 
-# Gatsby-specific
-
-What to do with `{ eq: null }` including undefined values.
-
-# Problems and potential improvements
-
-Avoiding async iterators: https://github.com/nodejs/node/issues/31979
-
-- pagination
-- aggregation (count, min, max, group, etc)
-- replace trackInlineObjectsInRootNode with context
-- remove \_\_gatsby_resolved (was needed for sift only)
-
 [1]: https://docs.mongodb.com/manual/core/index-compound/
 [2]: https://docs.mongodb.com/manual/core/index-multikey/
 [3]: https://github.com/DoctorEvidence/lmdb-store
@@ -409,7 +368,3 @@ Avoiding async iterators: https://github.com/nodejs/node/issues/31979
 [5]: https://github.com/DoctorEvidence/lmdb-store#concurrency-and-versioning
 [6]: https://github.com/DoctorEvidence/lmdb-store/discussions/62#discussioncomment-898949
 [7]: https://docs.mongodb.com/manual/core/index-sparse/
-
-> Yet we should seriously consider using for multi-pass
-> index scans when [this feature](https://github.com/DoctorEvidence/lmdb-store/issues/64)
-> is implemented.
